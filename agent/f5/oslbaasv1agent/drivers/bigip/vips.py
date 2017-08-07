@@ -130,8 +130,7 @@ class BigipVipManager(object):
 
         virtual_type = 'fastl4'
         if 'protocol' in vip:
-            if vip['protocol'] == 'HTTP' or \
-               vip['protocol'] == 'HTTPS':
+            if vip['protocol'] == 'HTTP':
                 virtual_type = 'standard'
         if 'session_persistence' in vip:
             if vip['session_persistence'] == \
@@ -201,6 +200,12 @@ class BigipVipManager(object):
         bigip_vs.set_pool(name=vip['id'],
                           pool_name=pool['id'],
                           folder=pool['tenant_id'])
+
+        if pool['lb_method'] == 'SOURCE_IP':
+            bigip_vs.set_persist_profile(name=vip['id'],
+                                         profile_name='/Common/source_addr',
+                                         folder=vip['tenant_id'])
+
         if vip['admin_state_up']:
             bigip_vs.enable_virtual_server(name=vip['id'],
                                            folder=pool['tenant_id'])
