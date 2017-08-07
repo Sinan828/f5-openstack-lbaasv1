@@ -1,5 +1,5 @@
 """ F5 LBaaS Driver """
-# Copyright 2014-2016 F5 Networks Inc.
+# Copyright 2014 F5 Networks Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +18,8 @@ import uuid
 import netaddr
 import datetime
 
-try:
-    from oslo.config import cfg  # @UnresolvedImport
-except ImportError:
-    from oslo_config import cfg
-
 from time import time
+from oslo.config import cfg  # @UnresolvedImport
 
 from neutron.api.v2 import attributes
 from neutron.common import constants as q_const
@@ -32,11 +28,18 @@ from neutron.common import rpc as q_rpc
 from neutron.db import agents_db
 from neutron.context import get_admin_context
 from neutron.extensions import portbindings
+from neutron.common import log
 import f5.oslbaasv1driver.drivers.constants as lbaasv1constants
+
+from neutron.plugins.ml2 import db
+from neutron.plugins.common import constants
+from neutron.plugins.ml2 import driver_api as api
+from neutron.extensions import portbindings
+from neutron.api.v2 import attributes
+from neutron.common import constants as q_const
 
 PREJUNO = False
 PREKILO = False
-PREMITAKA = False
 try:
     from neutron.services.loadbalancer.drivers.abstract_driver \
         import LoadBalancerAbstractDriver  # @UnresolvedImport @Reimport
@@ -53,16 +56,17 @@ try:
         import VipNotFound  # @UnresolvedImport @Reimport
     from neutron.extensions.loadbalancer \
         import HealthMonitorNotFound  # @UnresolvedImport @Reimport
+
     PREKILO = True
     try:
         from neutron.openstack.common import rpc
         from neutron.openstack.common.rpc import proxy
+
         PREJUNO = True
     except ImportError:
         from neutron.common import rpc as proxy
-    from neutron.common import log
 except ImportError:
-    # Kilo or greater
+    # Kilo
     from neutron_lbaas.services.loadbalancer.drivers.abstract_driver \
         import LoadBalancerAbstractDriver  # @UnresolvedImport @Reimport
     from neutron_lbaas.extensions \
@@ -79,12 +83,6 @@ except ImportError:
     from neutron_lbaas.extensions.loadbalancer \
         import HealthMonitorNotFound  # @UnresolvedImport @Reimport
     import f5.oslbaasv1driver.drivers.rpc as proxy
-    try:
-        from neutron.common import log
-        PREMITAKA = True
-    except ImportError:
-        from oslo_log import helpers as log
-        log.log = log.log_method_call
 
 LOG = logging.getLogger(__name__)
 
@@ -156,9 +154,9 @@ class LoadBalancerCallbacks(object):
                 for pool in agent_pools['pools']:
                     pool_ids.append(
                         {
-                         'agent_host': agent['host'],
-                         'pool_id': pool['id'],
-                         'tenant_id': pool['tenant_id']
+                            'agent_host': agent['host'],
+                            'pool_id': pool['id'],
+                            'tenant_id': pool['tenant_id']
                         }
                     )
             return pool_ids
@@ -190,9 +188,9 @@ class LoadBalancerCallbacks(object):
                         # add agent reference
                         pool_ids.append(
                             {
-                             'agent_host': agent['host'],
-                             'pool_id': pool['id'],
-                             'tenant_id': pool['tenant_id']
+                                'agent_host': agent['host'],
+                                'pool_id': pool['id'],
+                                'tenant_id': pool['tenant_id']
                             }
                         )
             return pool_ids
@@ -233,18 +231,18 @@ class LoadBalancerCallbacks(object):
                     if pool['status'] != constants.ACTIVE:
                         pools_to_update.append(
                             {
-                             'agent_host': agent['host'],
-                             'pool_id': pool['id'],
-                             'tenant_id': pool['tenant_id']
+                                'agent_host': agent['host'],
+                                'pool_id': pool['id'],
+                                'tenant_id': pool['tenant_id']
                             }
                         )
                     for hms in pool['health_monitors_status']:
                         if hms['status'] != constants.ACTIVE:
                             pools_to_update.append(
                                 {
-                                 'agent_host': agent['host'],
-                                 'pool_id': pool['id'],
-                                 'tenant_id': pool['tenant_id']
+                                    'agent_host': agent['host'],
+                                    'pool_id': pool['id'],
+                                    'tenant_id': pool['tenant_id']
                                 }
                             )
             for agent_host in pool_ids_by_agent_host.keys():
@@ -259,8 +257,8 @@ class LoadBalancerCallbacks(object):
                     if vip['status'] != constants.ACTIVE:
                         pools_to_update.append(
                             {
-                             'agent_host': agent_host,
-                             'pool_id': pool['id']
+                                'agent_host': agent_host,
+                                'pool_id': pool['id']
                             }
                         )
                 members = self.plugin.get_members(
@@ -272,8 +270,8 @@ class LoadBalancerCallbacks(object):
                     if member['status'] != constants.ACTIVE:
                         pools_to_update.append(
                             {
-                             'agent_host': agent_host,
-                             'pool_id': pool['id']
+                                'agent_host': agent_host,
+                                'pool_id': pool['id']
                             }
                         )
 
@@ -416,7 +414,7 @@ class LoadBalancerCallbacks(object):
         vtep_hosts = []
         for port in ports:
             if 'binding:host_id' in port and \
-               port['binding:host_id'] not in vtep_hosts:
+                            port['binding:host_id'] not in vtep_hosts:
                 vtep_hosts.append(port['binding:host_id'])
         for vtep_host in vtep_hosts:
             if nettype == 'vxlan':
@@ -495,7 +493,7 @@ class LoadBalancerCallbacks(object):
 
         for alloc in allocated:
             if matching_keys['subnet_id'] and \
-                    alloc['subnet_id'] != matching_keys['subnet_id']:
+                            alloc['subnet_id'] != matching_keys['subnet_id']:
                 continue
 
             try:
@@ -503,7 +501,7 @@ class LoadBalancerCallbacks(object):
             except:
                 continue
             if matching_keys['tenant_id'] and \
-                    net['tenant_id'] != matching_keys['tenant_id']:
+                            net['tenant_id'] != matching_keys['tenant_id']:
                 continue
             if matching_keys['shared'] and not net['shared']:
                 continue
@@ -527,10 +525,10 @@ class LoadBalancerCallbacks(object):
             na_net = netaddr.IPNetwork(c_subnet['cidr'])
             if na_add in na_net:
                 if matching_keys['subnet_id'] and \
-                        c_subnet['id'] != matching_keys['subnet_id']:
+                                c_subnet['id'] != matching_keys['subnet_id']:
                     continue
                 if matching_keys['tenant_id'] and \
-                        c_subnet['tenant_id'] != matching_keys['tenant_id']:
+                                c_subnet['tenant_id'] != matching_keys['tenant_id']:
                     continue
                 if matching_keys['shared'] and not c_subnet['shared']:
                     continue
@@ -556,12 +554,12 @@ class LoadBalancerCallbacks(object):
             na_net = netaddr.IPNetwork(subnet_dict['cidr'])
             if na_add in na_net:
                 if matching_keys['subnet_id'] and \
-                        subnet_dict['id'] != \
-                        matching_keys['subnet_id']:
+                                subnet_dict['id'] != \
+                                matching_keys['subnet_id']:
                     continue
                 if matching_keys['tenant_id'] and \
-                        subnet_dict['tenant_id'] != \
-                        matching_keys['tenant_id']:
+                                subnet_dict['tenant_id'] != \
+                                matching_keys['tenant_id']:
                     continue
                 if matching_keys['shared'] and not subnet_dict['shared']:
                     continue
@@ -912,7 +910,7 @@ class LoadBalancerCallbacks(object):
                 if 'allowed_address_pairs' in port:
                     for aap in port['allowed_address_pairs']:
                         if aap['ip_address'] == ip_address and \
-                                aap['mac_address'] == port['mac_address']:
+                                        aap['mac_address'] == port['mac_address']:
                             return True
                         address_pairs.append(aap)
                 address_pairs.append(
@@ -938,7 +936,7 @@ class LoadBalancerCallbacks(object):
                 if 'allowed_address_pairs' in port:
                     for aap in port['allowed_address_pairs']:
                         if aap['ip_address'] == ip_address and \
-                                aap['mac_address'] == port['mac_address']:
+                                        aap['mac_address'] == port['mac_address']:
                             continue
                         address_pairs.append(aap)
                 port = {'port': {'allowed_address_pairs': address_pairs}}
@@ -1171,6 +1169,7 @@ class LoadBalancerAgentApi(proxy.RpcProxy):  # @UndefinedVariable
     """
 
     BASE_RPC_API_VERSION = '1.0'
+
     # history
     #   1.0 Initial version
     #   1.1 Support agent_updated call
@@ -1342,6 +1341,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         invokes the LoadBalancerAgentApi class methods to
         send the RPC messages.
     """
+
     def __init__(self, plugin, env=None):
         if env:
             self.env = str(env).lower()
@@ -1369,6 +1369,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         # mixins agent_notifiers dictionary for it's env
         self.plugin.agent_notifiers.update(
             {q_const.AGENT_TYPE_LOADBALANCER: self.agent_rpc})
+        self.pool_port_id = {}
 
     def _core_plugin(self):
         """ Get the core plugin """
@@ -1428,6 +1429,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
     def create_vip(self, context, vip):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("create vip: vip: %s", vip)
         agent = self.get_pool_agent(context, vip['pool_id'])
         vip['pool'] = self._get_pool(context, vip['pool_id'])
         # get the complete service definition from the data model
@@ -1440,7 +1442,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
 
         # Update the port for the VIP to show ownership by this driver
         port_data = {
-            'admin_state_up': True,
+            'admin_state_up': vip['admin_state_up'],
             'device_id': str(
                 uuid.uuid5(
                     uuid.NAMESPACE_DNS, str(agent['host'])
@@ -1449,19 +1451,24 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             'device_owner': 'network:f5lbaas',
             'status': q_const.PORT_STATUS_ACTIVE
         }
+        LOG.info("create vip, port data: %s", port_data)
         port_data[portbindings.HOST_ID] = agent['host']
         self._core_plugin().update_port(
             context,
             vip['port_id'],
             {'port': port_data}
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("create vip, update network type, the service: %s", service)
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_vip(context, vip, service, agent['host'])
+        LOG.info("create vip end")
 
     @log.log
     def update_vip(self, context, old_vip, vip):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("update vip: old_vip: %s, vip: %s", old_vip, vip)
         agent = self.get_pool_agent(context, vip['pool_id'])
 
         old_vip['pool'] = self._get_pool(context, old_vip['pool_id'])
@@ -1475,10 +1482,13 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("update vip, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_vip(context, old_vip, vip,
                                   service, agent['host'])
+        LOG.info("update vip end")
 
     @log.log
     def delete_vip(self, context, vip):
@@ -1495,6 +1505,8 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("delete vip, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_vip(context, vip, service, agent['host'])
@@ -1502,6 +1514,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
     @log.log
     def create_pool(self, context, pool):
         """ Handle LBaaS method by passing to agent """
+        LOG.info("create pool begin.")
         # which agent should handle provisioning
         agent = self.pool_scheduler.schedule(self.plugin, context,
                                              pool, self.env)
@@ -1510,6 +1523,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         if not PREJUNO:
             agent = self.plugin._make_agent_dict(agent)
 
+        LOG.info("create pool, begin query service.")
         # get the complete service definition from the data model
         service = self.callbacks.get_service_by_pool_id(
             context,
@@ -1517,13 +1531,37 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        LOG.info("create pool, the service: %s", service)
+        # create_fake port for the pool network
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.info("create pool, begin create fake port.")
+        pool_fake_port = self._core_plugin().create_port(
+            context,
+            {'port': {'tenant_id': subnet['tenant_id'],
+                      'network_id': subnet['network_id'],
+                      'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                      'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                      'device_id': pool['id'],
+                      'device_owner': 'network:f5lbaas',
+                      'admin_state_up': pool['admin_state_up'],
+                      'name': 'fake_pool_port_' + pool['id'],
+                      portbindings.HOST_ID: agent['host']}})
+        LOG.info("create pool, the fake port: %s", pool_fake_port)
+        self.pool_port_id[pool['id']] = pool_fake_port['id']
+        LOG.info("create pool, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.info("create pool, begin update network type.")
+        self.update_network_type(context, service, agent['host'])
+        LOG.info("create pool, update network type, the service: %s", service)
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool(context, pool, service, agent['host'])
+        LOG.info("create pool end")
 
     @log.log
     def update_pool(self, context, old_pool, pool):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("update pool: old_pool: %s, pool: %s", old_pool, pool)
         agent = self.get_pool_agent(context, pool['id'])
 
         if 'vip_id' in old_pool and old_pool['vip_id']:
@@ -1538,17 +1576,36 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("update_pool, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_pool(context, old_pool, pool,
                                    service, agent['host'])
+        LOG.info("update pool end")
 
     @log.log
     def delete_pool(self, context, pool):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("delete pool: pool: %s", pool)
         try:
             agent = self.get_pool_agent(context, pool['id'])
+            filters = {'device_id': [pool['id']]}
+            port_id = None
+            if self.pool_port_id.get(pool['id'], None):
+                LOG.info("delete pool, pool id:%s", pool['id'])
+                port_id = self.pool_port_id[pool['id']]
+                LOG.info("delete pool, port id:%s", port_id)
+                del self.pool_port_id[pool['id']]
+            else:
+                ports = self._core_plugin().get_ports(context, filters)
+                if ports:
+                    port = ports[0]
+                    port_id = port['id']
+            if port_id:
+                LOG.debug("delete fake port %s", port_id)
+                self._core_plugin().delete_port(context, port_id)
         except lbaas_agentscheduler.NoActiveLbaasAgent:
             # if there is agent for this pool.. allow the data
             # model to delete it.
@@ -1562,14 +1619,19 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        LOG.info("delete pool, the service: %s", service)
+        self.update_network_type(context, service, agent['host'])
+        LOG.info("delete pool, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool(context, pool, service, agent['host'])
+        LOG.info("delete pool end")
 
     @log.log
     def create_member(self, context, member):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("create member: member: %s", member)
         agent = self.get_pool_agent(context, member['pool_id'])
 
         # populate a pool structure for the rpc message
@@ -1590,15 +1652,15 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         this_member_count = 0
         for service_member in service['members']:
             if service_member['address'] == member['address'] and \
-               service_member['protocol_port'] == member['protocol_port']:
+                            service_member['protocol_port'] == member['protocol_port']:
                 this_member_count += 1
         if this_member_count > 1:
             status_description = 'duplicate member %s:%s found in pool %s' \
-                % (
-                    member['address'],
-                    member['protocol_port'],
-                    member['pool_id']
-                )
+                                 % (
+                                     member['address'],
+                                     member['protocol_port'],
+                                     member['pool_id']
+                                 )
             self.callbacks.update_member_status(
                 context,
                 member_id=member['id'],
@@ -1606,13 +1668,64 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                 status_description=status_description,
                 host=agent['host']
             )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("create member, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_member(context, member, service, agent['host'])
+        LOG.info("create member end")
+
+    def update_network_type(self, context, service, host_id):
+        # update vip networktype from vxlan to vlan
+        LOG.info("update network type")
+        if service['vip'].has_key('network'):
+            # raise Exception()
+            LOG.error("-------%s", service)
+            vip_port = service['vip']['port_id']
+            vip_segment = self.get_segment(context, vip_port, host_id)
+            LOG.error(vip_segment)
+            if not vip_segment:
+                LOG.warning("get segmentid failed, hostid:%s, vip_port:%s" % (host_id, vip_port))
+            else:
+                service['vip']['network']['provider:network_type'] = constants.TYPE_VLAN
+                service['vip']['network']['provider:segmentation_id'] = vip_segment[api.SEGMENTATION_ID]
+                service['vip']['network']['provider:physical_network'] = vip_segment[api.PHYSICAL_NETWORK]
+
+        # get segment id from pool fake port
+        # update member networktype from vxlan to vlan
+        pool = service['pool']
+        LOG.info("upadte network type, pool:%s", pool)
+        if self.pool_port_id.get(pool['id'], None):
+            fake_port_id = self.pool_port_id[pool['id']]
+        else:
+            filters = {'device_id': [pool['id']]}
+            ports = self._core_plugin().get_ports(context, filters)
+            if not ports:
+                LOG.warning("no port is bounded with the pool %s", pool['id'])
+                return
+            fake_port = ports[0]
+            fake_port_id = fake_port['id']
+            self.pool_port_id[pool['id']] = fake_port_id
+        pool_segment = self.get_segment(context, fake_port_id, host_id)
+        if not pool_segment:
+            LOG.error("get segmentid failed, hostid:%s, pool_port:%s" % (host_id, fake_port_id))
+            return
+        service['pool']['provider:network_type'] = constants.TYPE_VLAN
+        service['pool']['provider:segmentation_id'] = pool_segment[api.SEGMENTATION_ID]
+        service['pool']['provider:physical_network'] = pool_segment[api.PHYSICAL_NETWORK]
+        members = []
+        for member in service['members']:
+            member['network']['provider:network_type'] = constants.TYPE_VLAN
+            member['network']['provider:segmentation_id'] = pool_segment[api.SEGMENTATION_ID]
+            member['network']['provider:physical_network'] = pool_segment[api.PHYSICAL_NETWORK]
+            members.append(member)
+        service['members'] = members
+        LOG.info("update network type end, service:%s", service)
 
     @log.log
     def update_member(self, context, old_member, member):
         """ Handle LBaaS method by passing to agent """
+        LOG.info("update member: old member: %s, member: %s", old_member, member)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, member['pool_id'])
 
@@ -1633,6 +1746,8 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("update member, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_member(context, old_member, member,
@@ -1656,11 +1771,13 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                 context, old_member, member,
                 old_pool_service, agent['host']
             )
+        LOG.info("update member end")
 
     @log.log
     def delete_member(self, context, member):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("delete member: member: %s", member)
         agent = self.get_pool_agent(context, member['pool_id'])
 
         # populate a pool structure for the rpc message
@@ -1675,15 +1792,19 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("delete member, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_member(context, member,
                                      service, agent['host'])
+        LOG.info("delete member end")
 
     @log.log
     def create_pool_health_monitor(self, context, health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
+        LOG.info("create pool health_monitor: health_monitor: %s, pool_id: %s", health_monitor, pool_id)
         agent = self.get_pool_agent(context, pool_id)
 
         # populate a pool strucutre for the rpc message
@@ -1696,16 +1817,21 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("create poolhealth_monitor, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
+        LOG.info("create pool health_monitor end")
 
     @log.log
     def update_pool_health_monitor(self, context, old_health_monitor,
                                    health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
+        LOG.info("update pool health_monitor: old_health_monitor: %s, health_monitor: %s, pool_id: %s",
+                 old_health_monitor, health_monitor, pool_id)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1720,15 +1846,21 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             host=agent['host']
         )
 
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("update pool health_monitor, update network type the service: %s", service)
+
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
                                              service, agent['host'])
+        LOG.info("update pool health_monitor end")
 
     @log.log
     def update_health_monitor(self, context, old_health_monitor,
                               health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
+        LOG.info("update health_monitor: old_health_monitor: %s, health_monitor: %s, pool_id: %s",
+                 old_health_monitor, health_monitor, pool_id)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1742,15 +1874,19 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("update health_monitor, update network type the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
                                              service, agent['host'])
+        LOG.info("update health_monitor end")
 
     @log.log
     def delete_pool_health_monitor(self, context, health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
+        LOG.info("delete pool health_monitor: health_monitor: %s, pool_id: %s", health_monitor, pool_id)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1764,11 +1900,26 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        self.update_network_type(context, service, agent['host'])
+        LOG.debug("delete pool health_monitor, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
+        LOG.info("delete pool health_monitor end")
+
+    def get_segment(self, context, port_id, host_id):
+        try:
+            levels = db.get_binding_levels(context.session, port_id, host_id)
+            for level in levels:
+                segment = db.get_segment_by_id(context.session, level.segment_id)
+                if segment and segment.get(api.NETWORK_TYPE) == constants.TYPE_VLAN:
+                    LOG.debug("segment id is %s", segment)
+                    return segment
+        except Exception as exc:
+            LOG.error("could not get segment id by port %s and host %s, %s" % (port_id, host_id, exc.message))
+        return None
 
     @log.log
     def stats(self, context, pool_id):
