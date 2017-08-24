@@ -246,8 +246,8 @@ class LbaasAgentManagerBase(periodic_task.PeriodicTasks):
                         % conf.f5_bigip_lbaas_device_driver))
             self.lbdriver = importutils.import_object(
                 conf.f5_bigip_lbaas_device_driver, self.conf)
-            if conf.agent_id:
-                self.agent_host = conf.agent_id
+            if self.conf.agent_id:
+                self.agent_host = self.conf.agent_id
                 self.lbdriver.agent_host = self.agent_host
                 LOG.debug('setting agent host to %s' % self.agent_host)
             elif self.lbdriver.agent_id:
