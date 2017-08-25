@@ -267,7 +267,7 @@ class VirtualServer(object):
                     timeout=const.CONNECTION_TIMEOUT)
                 if response.status_code < 400:
                     return True
-                elif response.status_code == 409:
+                elif response.status_code == 409 or response.status_code == 404:
                     return True
                 else:
                     Log.error('profile', response.text)
@@ -310,7 +310,7 @@ class VirtualServer(object):
                                     profile['selfLink'])
                                 del_res = self.bigip.icr_session.delete(
                                     del_req, timeout=const.CONNECTION_TIMEOUT)
-                                if del_res.status_code < 400 or response.status_code == 404:
+                                if del_res.status_code < 400:
                                     return True
                                 else:
                                     Log.error('profile', del_res.text)
