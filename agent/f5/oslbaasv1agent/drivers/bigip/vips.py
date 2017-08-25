@@ -130,8 +130,7 @@ class BigipVipManager(object):
 
         virtual_type = 'fastl4'
         if 'protocol' in vip:
-            if vip['protocol'] == 'HTTP' or \
-               vip['protocol'] == 'HTTPS':
+            if vip['protocol'] == 'HTTP':
                 virtual_type = 'standard'
         if 'session_persistence' in vip:
             if vip['session_persistence'] == \
@@ -220,6 +219,8 @@ class BigipVipManager(object):
                 set_persist(name=vip['id'],
                             profile_name='/Common/source_addr',
                             folder=vip['tenant_id'])
+                if pool['protocol'] == 'TCP' or pool['protocol'] == 'HTTPS':
+                    bigip_vs.remove_profile(name=vip['id'], profile_name='/Common/http', folder=vip['tenant_id'])
             elif persistence_type == 'HTTP_COOKIE':
                 # HTTP cookie persistence requires an HTTP profile
                 LOG.debug('adding http profile and' +
@@ -237,6 +238,8 @@ class BigipVipManager(object):
                                          folder=vip['tenant_id'])
             elif persistence_type == 'APP_COOKIE':
                 self._set_bigip_vip_cookie_persist(bigip, service)
+        elif pool['lb_method'].upper() == 'SOURCE_IP':
+            bigip_vs.set_persist_profile(name=vip['id'], profile_name='/Common/source_addr', folder=vip['tenant_id'])
         else:
             bigip_vs.remove_all_persist_profiles(name=vip['id'],
                                                  folder=vip['tenant_id'])

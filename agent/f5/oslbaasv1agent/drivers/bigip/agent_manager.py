@@ -56,7 +56,7 @@ OPTS = [
         'f5_bigip_lbaas_device_driver',
         default=('f5.oslbaasv1agent.drivers.bigip'
                  '.icontrol_driver.iControlDriver'),
-        help=_('The driver used to provision BigIPs'),
+        help=_('The driver used to provision BigIPs')
     ),
     cfg.BoolOpt(
         'l2_population',
@@ -96,7 +96,7 @@ OPTS = [
     ),
     cfg.StrOpt(
         'environment_prefix', default='',
-        help=_('The object name prefix for this environment'),
+        help=_('The object name prefix for this environment')
     ),
     cfg.BoolOpt(
         'environment_specific_plugin', default=False,
@@ -110,6 +110,10 @@ OPTS = [
     cfg.DictOpt(
         'capacity_policy', default={},
         help=_('Metrics to measure capacity and their limits.')
+    ),
+    cfg.StrOpt(
+        'agent_id', default=None,
+        help=_('The agent host name.')
     )
 ]
 
@@ -226,7 +230,11 @@ class LbaasAgentManagerBase(periodic_task.PeriodicTasks):
                         % conf.f5_bigip_lbaas_device_driver))
             self.lbdriver = importutils.import_object(
                 conf.f5_bigip_lbaas_device_driver, self.conf)
-            if self.lbdriver.agent_id:
+            if self.conf.agent_id:
+                self.agent_host = self.conf.agent_id
+                self.lbdriver.agent_host = self.agent_host
+                LOG.debug('setting agent host to %s' % self.agent_host)
+            elif self.lbdriver.agent_id:
                 self.agent_host = conf.host + ":" + self.lbdriver.agent_id
                 self.lbdriver.agent_host = self.agent_host
                 LOG.debug('setting agent host to %s' % self.agent_host)
