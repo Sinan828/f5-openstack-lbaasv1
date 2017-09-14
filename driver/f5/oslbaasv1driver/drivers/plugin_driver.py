@@ -31,13 +31,6 @@ from neutron.extensions import portbindings
 from neutron.common import log
 import f5.oslbaasv1driver.drivers.constants as lbaasv1constants
 
-from neutron.plugins.ml2 import db
-from neutron.plugins.common import constants
-from neutron.plugins.ml2 import driver_api as api
-from neutron.extensions import portbindings
-from neutron.api.v2 import attributes
-from neutron.common import constants as q_const
-
 PREJUNO = False
 PREKILO = False
 try:
@@ -122,6 +115,7 @@ class LoadBalancerCallbacks(object):
         self.scheduler = scheduler
         self.net_cache = {}
         self.subnet_cache = {}
+        self.cluster_wide_agents = {}
 
         self.last_cache_update = datetime.datetime.now()
 
@@ -129,10 +123,112 @@ class LoadBalancerCallbacks(object):
         """ Get the core plugin """
         return self.plugin._core_plugin
 
+    # change the admin_state_up of the an agent
+    @log.log
+    def set_agent_admin_state(self, context, admin_state_up, host=None):
+        """Set the admin_up_state of an agent"""
+        if not host:
+            LOG.error('tried to set agent admin_state_up without host')
+            return False
+        with context.session.begin(subtransactions=True):
+            query = context.session.query(agents_db.Agent)
+            query = query.filter(
+                agents_db.Agent.agent_type ==
+                q_const.AGENT_TYPE_LOADBALANCER,
+                agents_db.Agent.host == host)
+            try:
+                agent = query.one()
+                if not agent.admin_state_up == admin_state_up:
+                    agent.admin_state_up = admin_state_up
+                    context.session.add(agent)
+            except Exception as exc:
+                LOG.error('query for agent produced: %s' % str(exc))
+                return False
+        return True
+
+    # change the admin_state_up of the an agent
+    @log.log
+    def scrub_dead_agents(self, context, env, group, host=None):
+        """Remove all non-alive or admin down agents"""
+        LOG.debug('scrubing dead agent bindings')
+        with context.session.begin(subtransactions=True):
+            try:
+                self.plugin.pool_scheduler.scrub_dead_agents(
+                    context, self.plugin, env, group=None)
+            except Exception as exc:
+                LOG.error('scub dead agents exception: %s' % str(exc))
+                return False
+        return True
+
+    # return a single active agent to implement cluster wide changes
+    # which can not efficiently mapped back to a particulare agent
+    @log.log
+    def get_clusterwide_agent(self, context, env, group, host=None):
+        """Get an agent to perform clusterwide tasks"""
+        LOG.debug('getting agent to perform clusterwide tasks')
+        with context.session.begin(subtransactions=True):
+            if (env, group) in self.cluster_wide_agents:
+                known_agent = self.cluster_wide_agents[(env, group)]
+                if self.plugin.is_eligible_agent(active=True,
+                                                 agent=known_agent):
+                    return known_agent
+                else:
+                    del (self.cluster_wide_agents[(env, group)])
+            try:
+                agents = \
+                    self.scheduler.get_agents_in_env(self.plugin,
+                                                     context,
+                                                     env, group, True)
+                if agents:
+                    self.cluster_wide_agents[(env, group)] = agents[0]
+                    return agents[0]
+                else:
+                    LOG.error('no active agents available for clusterwide ',
+                              ' tasks %s group number %s' % (env, group))
+                    return {}
+            except Exception as exc:
+                LOG.error('clusterwide agent exception: %s' % str(exc))
+                return {}
+        return {}
+
+    # validate a list of loadbalancer id - assure they are not deleted
+    @log.log
+    def validate_vips_state(self, context, vips, host=None):
+        vip_status = {}
+        for vipid in vips:
+            with context.session.begin(subtransactions=True):
+                try:
+                    vip_db = self.plugin.get_vip(context,
+                                                 vipid)
+                    vip_status[vipid] = vip_db.provisioning_status
+
+                except Exception as e:
+                    LOG.error('Exception: get_vip: %s',
+                              e.message)
+                    vip_status[vipid] = 'Unknown'
+        return vip_status
+
+    # validate a list of pools id - assure they are not deleted
+    @log.log
+    def validate_pools_state(self, context, pools, host=None):
+        pool_status = {}
+        for poolid in pools:
+            with context.session.begin(subtransactions=True):
+                try:
+                    pool_db = self.plugin.get_pool(context, poolid)
+                    pool_status[poolid] = pool_db.provisioning_status
+                except Exception as e:
+                    LOG.error('Exception: get_pool: %s',
+                              e.message)
+                    pool_status[poolid] = 'Unknown'
+        return pool_status
+
     @log.log
     def get_all_pools(self, context, env=None, group=0, host=None):
         """ Get all pools for this group in this env"""
         with context.session.begin(subtransactions=True):
+            self.scheduler.scrub_dead_agents(
+                self.plugin, context, env, group)
             if not host:
                 return []
             agents = self.scheduler.get_agents_in_env(self.plugin,
@@ -165,6 +261,8 @@ class LoadBalancerCallbacks(object):
     def get_active_pools(self, context, env=None, group=0, host=None):
         """ Get pools that are active for this group in this env"""
         with context.session.begin(subtransactions=True):
+            self.scheduler.scrub_dead_agents(
+                self.plugin, context, env, group)
             if not host:
                 return []
             agents = self.scheduler.get_agents_in_env(self.plugin,
@@ -199,6 +297,8 @@ class LoadBalancerCallbacks(object):
     def get_pending_pools(self, context, env=None, group=0, host=None):
         """ Get pools that have pending task for this group in this env"""
         with context.session.begin(subtransactions=True):
+            self.scheduler.scrub_dead_agents(
+                self.plugin, context, env, group)
             if not host:
                 return []
             agents = self.scheduler.get_agents_in_env(self.plugin,
@@ -276,6 +376,34 @@ class LoadBalancerCallbacks(object):
                         )
 
             return pools_to_update
+
+    @log.log
+    def get_errored_pools(self, context, env, group=None, host=None):
+        """Get pending pools for this group in this env."""
+        pools = []
+        with context.session.begin(subtransactions=True):
+            self.scheduler.scrub_dead_agents(
+                self.plugin, context, env, group)
+            agents = self.scheduler.get_agents_in_env(
+                self.plugin, context, env, group, active=None)
+            for agent in agents:
+                agent_lbs = self.plugin.list_pools_on_lbaas_agent(
+                    context,
+                    agent.id
+                )
+                for pl in agent_lbs:
+                    if (pl.provisioning_status == constants.ERROR):
+                        pools.append(
+                            {
+                                'agent_host': agent['host'],
+                                'pool_id': pl.id,
+                                'tenant_id': pl.tenant_id
+                            }
+                        )
+        if host:
+            return [lb for lb in pools if lb['agent_host'] == host]
+        else:
+            return pools
 
     @log.log
     def get_service_by_pool_id(
@@ -1369,7 +1497,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         # mixins agent_notifiers dictionary for it's env
         self.plugin.agent_notifiers.update(
             {q_const.AGENT_TYPE_LOADBALANCER: self.agent_rpc})
-        self.pool_port_id = {}
 
     def _core_plugin(self):
         """ Get the core plugin """
@@ -1429,7 +1556,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
     def create_vip(self, context, vip):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("create vip: vip: %s", vip)
         agent = self.get_pool_agent(context, vip['pool_id'])
         vip['pool'] = self._get_pool(context, vip['pool_id'])
         # get the complete service definition from the data model
@@ -1442,7 +1568,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
 
         # Update the port for the VIP to show ownership by this driver
         port_data = {
-            'admin_state_up': vip['admin_state_up'],
+            'admin_state_up': True,
             'device_id': str(
                 uuid.uuid5(
                     uuid.NAMESPACE_DNS, str(agent['host'])
@@ -1451,24 +1577,19 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             'device_owner': 'network:f5lbaas',
             'status': q_const.PORT_STATUS_ACTIVE
         }
-        LOG.info("create vip, port data: %s", port_data)
         port_data[portbindings.HOST_ID] = agent['host']
         self._core_plugin().update_port(
             context,
             vip['port_id'],
             {'port': port_data}
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("create vip, update network type, the service: %s", service)
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_vip(context, vip, service, agent['host'])
-        LOG.info("create vip end")
 
     @log.log
     def update_vip(self, context, old_vip, vip):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("update vip: old_vip: %s, vip: %s", old_vip, vip)
         agent = self.get_pool_agent(context, vip['pool_id'])
 
         old_vip['pool'] = self._get_pool(context, old_vip['pool_id'])
@@ -1482,13 +1603,10 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("update vip, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_vip(context, old_vip, vip,
                                   service, agent['host'])
-        LOG.info("update vip end")
 
     @log.log
     def delete_vip(self, context, vip):
@@ -1505,8 +1623,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("delete vip, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_vip(context, vip, service, agent['host'])
@@ -1514,7 +1630,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
     @log.log
     def create_pool(self, context, pool):
         """ Handle LBaaS method by passing to agent """
-        LOG.info("create pool begin.")
         # which agent should handle provisioning
         agent = self.pool_scheduler.schedule(self.plugin, context,
                                              pool, self.env)
@@ -1523,7 +1638,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         if not PREJUNO:
             agent = self.plugin._make_agent_dict(agent)
 
-        LOG.info("create pool, begin query service.")
         # get the complete service definition from the data model
         service = self.callbacks.get_service_by_pool_id(
             context,
@@ -1531,37 +1645,13 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        LOG.info("create pool, the service: %s", service)
-        # create_fake port for the pool network
-        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
-        LOG.info("create pool, begin create fake port.")
-        pool_fake_port = self._core_plugin().create_port(
-            context,
-            {'port': {'tenant_id': subnet['tenant_id'],
-                      'network_id': subnet['network_id'],
-                      'mac_address': attributes.ATTR_NOT_SPECIFIED,
-                      'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
-                      'device_id': pool['id'],
-                      'device_owner': 'network:f5lbaas',
-                      'admin_state_up': pool['admin_state_up'],
-                      'name': 'fake_pool_port_' + pool['id'],
-                      portbindings.HOST_ID: agent['host']}})
-        LOG.info("create pool, the fake port: %s", pool_fake_port)
-        self.pool_port_id[pool['id']] = pool_fake_port['id']
-        LOG.info("create pool, begin update port status active.")
-        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
-        LOG.info("create pool, begin update network type.")
-        self.update_network_type(context, service, agent['host'])
-        LOG.info("create pool, update network type, the service: %s", service)
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool(context, pool, service, agent['host'])
-        LOG.info("create pool end")
 
     @log.log
     def update_pool(self, context, old_pool, pool):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("update pool: old_pool: %s, pool: %s", old_pool, pool)
         agent = self.get_pool_agent(context, pool['id'])
 
         if 'vip_id' in old_pool and old_pool['vip_id']:
@@ -1576,36 +1666,17 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("update_pool, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_pool(context, old_pool, pool,
                                    service, agent['host'])
-        LOG.info("update pool end")
 
     @log.log
     def delete_pool(self, context, pool):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("delete pool: pool: %s", pool)
         try:
             agent = self.get_pool_agent(context, pool['id'])
-            filters = {'device_id': [pool['id']]}
-            port_id = None
-            if self.pool_port_id.get(pool['id'], None):
-                LOG.info("delete pool, pool id:%s", pool['id'])
-                port_id = self.pool_port_id[pool['id']]
-                LOG.info("delete pool, port id:%s", port_id)
-                del self.pool_port_id[pool['id']]
-            else:
-                ports = self._core_plugin().get_ports(context, filters)
-                if ports:
-                    port = ports[0]
-                    port_id = port['id']
-            if port_id:
-                LOG.debug("delete fake port %s", port_id)
-                self._core_plugin().delete_port(context, port_id)
         except lbaas_agentscheduler.NoActiveLbaasAgent:
             # if there is agent for this pool.. allow the data
             # model to delete it.
@@ -1619,19 +1690,14 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        LOG.info("delete pool, the service: %s", service)
-        self.update_network_type(context, service, agent['host'])
-        LOG.info("delete pool, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool(context, pool, service, agent['host'])
-        LOG.info("delete pool end")
 
     @log.log
     def create_member(self, context, member):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("create member: member: %s", member)
         agent = self.get_pool_agent(context, member['pool_id'])
 
         # populate a pool structure for the rpc message
@@ -1668,64 +1734,13 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                 status_description=status_description,
                 host=agent['host']
             )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("create member, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_member(context, member, service, agent['host'])
-        LOG.info("create member end")
-
-    def update_network_type(self, context, service, host_id):
-        # update vip networktype from vxlan to vlan
-        LOG.info("update network type")
-        if service['vip'].has_key('network'):
-            # raise Exception()
-            LOG.error("-------%s", service)
-            vip_port = service['vip']['port_id']
-            vip_segment = self.get_segment(context, vip_port, host_id)
-            LOG.error(vip_segment)
-            if not vip_segment:
-                LOG.warning("get segmentid failed, hostid:%s, vip_port:%s" % (host_id, vip_port))
-            else:
-                service['vip']['network']['provider:network_type'] = constants.TYPE_VLAN
-                service['vip']['network']['provider:segmentation_id'] = vip_segment[api.SEGMENTATION_ID]
-                service['vip']['network']['provider:physical_network'] = vip_segment[api.PHYSICAL_NETWORK]
-
-        # get segment id from pool fake port
-        # update member networktype from vxlan to vlan
-        pool = service['pool']
-        LOG.info("upadte network type, pool:%s", pool)
-        if self.pool_port_id.get(pool['id'], None):
-            fake_port_id = self.pool_port_id[pool['id']]
-        else:
-            filters = {'device_id': [pool['id']]}
-            ports = self._core_plugin().get_ports(context, filters)
-            if not ports:
-                LOG.warning("no port is bounded with the pool %s", pool['id'])
-                return
-            fake_port = ports[0]
-            fake_port_id = fake_port['id']
-            self.pool_port_id[pool['id']] = fake_port_id
-        pool_segment = self.get_segment(context, fake_port_id, host_id)
-        if not pool_segment:
-            LOG.error("get segmentid failed, hostid:%s, pool_port:%s" % (host_id, fake_port_id))
-            return
-        service['pool']['provider:network_type'] = constants.TYPE_VLAN
-        service['pool']['provider:segmentation_id'] = pool_segment[api.SEGMENTATION_ID]
-        service['pool']['provider:physical_network'] = pool_segment[api.PHYSICAL_NETWORK]
-        members = []
-        for member in service['members']:
-            member['network']['provider:network_type'] = constants.TYPE_VLAN
-            member['network']['provider:segmentation_id'] = pool_segment[api.SEGMENTATION_ID]
-            member['network']['provider:physical_network'] = pool_segment[api.PHYSICAL_NETWORK]
-            members.append(member)
-        service['members'] = members
-        LOG.info("update network type end, service:%s", service)
 
     @log.log
     def update_member(self, context, old_member, member):
         """ Handle LBaaS method by passing to agent """
-        LOG.info("update member: old member: %s, member: %s", old_member, member)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, member['pool_id'])
 
@@ -1746,8 +1761,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("update member, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_member(context, old_member, member,
@@ -1771,13 +1784,11 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                 context, old_member, member,
                 old_pool_service, agent['host']
             )
-        LOG.info("update member end")
 
     @log.log
     def delete_member(self, context, member):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("delete member: member: %s", member)
         agent = self.get_pool_agent(context, member['pool_id'])
 
         # populate a pool structure for the rpc message
@@ -1792,19 +1803,15 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("delete member, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_member(context, member,
                                      service, agent['host'])
-        LOG.info("delete member end")
 
     @log.log
     def create_pool_health_monitor(self, context, health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
         # which agent should handle provisioning
-        LOG.info("create pool health_monitor: health_monitor: %s, pool_id: %s", health_monitor, pool_id)
         agent = self.get_pool_agent(context, pool_id)
 
         # populate a pool strucutre for the rpc message
@@ -1817,21 +1824,16 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("create poolhealth_monitor, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
-        LOG.info("create pool health_monitor end")
 
     @log.log
     def update_pool_health_monitor(self, context, old_health_monitor,
                                    health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
-        LOG.info("update pool health_monitor: old_health_monitor: %s, health_monitor: %s, pool_id: %s",
-                 old_health_monitor, health_monitor, pool_id)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1846,21 +1848,15 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             host=agent['host']
         )
 
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("update pool health_monitor, update network type the service: %s", service)
-
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
                                              service, agent['host'])
-        LOG.info("update pool health_monitor end")
 
     @log.log
     def update_health_monitor(self, context, old_health_monitor,
                               health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
-        LOG.info("update health_monitor: old_health_monitor: %s, health_monitor: %s, pool_id: %s",
-                 old_health_monitor, health_monitor, pool_id)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1874,19 +1870,15 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("update health_monitor, update network type the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
                                              service, agent['host'])
-        LOG.info("update health_monitor end")
 
     @log.log
     def delete_pool_health_monitor(self, context, health_monitor, pool_id):
         """ Handle LBaaS method by passing to agent """
-        LOG.info("delete pool health_monitor: health_monitor: %s, pool_id: %s", health_monitor, pool_id)
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1900,26 +1892,11 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-        self.update_network_type(context, service, agent['host'])
-        LOG.debug("delete pool health_monitor, update network type, the service: %s", service)
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
-        LOG.info("delete pool health_monitor end")
-
-    def get_segment(self, context, port_id, host_id):
-        try:
-            levels = db.get_binding_levels(context.session, port_id, host_id)
-            for level in levels:
-                segment = db.get_segment_by_id(context.session, level.segment_id)
-                if segment and segment.get(api.NETWORK_TYPE) == constants.TYPE_VLAN:
-                    LOG.debug("segment id is %s", segment)
-                    return segment
-        except Exception as exc:
-            LOG.error("could not get segment id by port %s and host %s, %s" % (port_id, host_id, exc.message))
-        return None
 
     @log.log
     def stats(self, context, pool_id):

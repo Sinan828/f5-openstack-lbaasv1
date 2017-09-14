@@ -150,7 +150,7 @@ OPTS = [
         help=_('Name of the VTEP SelfIP'),
     ),
     cfg.ListOpt(
-        'advertised_tunnel_types', default=['gre', 'vxlan'],
+        'advertised_tunnel_types', default=['vxlan'],
         help=_('tunnel types which are advertised to other VTEPs'),
     ),
     cfg.BoolOpt(
@@ -268,6 +268,10 @@ class iControlDriver(LBaaSBaseDriver):
         self.plugin_rpc = None
         self.__last_connect_attempt = None
         self.driver_name = 'f5-lbaas-icontrol'
+        self.operational = False
+        self.tg_initialized = False
+        self.ha_validated = False
+        self.agent_report_state = None
 
         # BIG-IP containers
         self.__bigips = {}
@@ -305,6 +309,7 @@ class iControlDriver(LBaaSBaseDriver):
             f5const.FDB_POPULATE_STATIC_ARP = self.conf.f5_populate_static_arp
 
         self.agent_configurations['device_drivers'] = [self.driver_name]
+        self.agent_configurations['icontrol_endpoints'] = {}
 
         self._init_bigip_hostnames()
 
@@ -329,12 +334,38 @@ class iControlDriver(LBaaSBaseDriver):
 
     def connect_bigips(self):
         """ Connect big-ips """
-        self._init_bigips()
-        if self.conf.f5_global_routed_mode:
-            local_ips = []
+        try:
+            self._init_bigips()
+            if self.conf.f5_global_routed_mode:
+                local_ips = []
+            else:
+                local_ips = self.network_builder.initialize_tunneling()
+            self._init_agent_config(local_ips)
+        except Exception as exc:
+            LOG.error("exception in intializing communications to BIG-IPs %s"
+                      % str(exc))
+            self._set_agent_status(False)
+
+    def _set_agent_status(self, force_resync=False):
+        for hostname in self.__bigips:
+            bigip = self.__bigips[hostname]
+            self.agent_configurations[
+                'icontrol_endpoints'][bigip.hostname][
+                    'status'] = bigip.status
+            self.agent_configurations[
+                'icontrol_endpoints'][bigip.hostname][
+                    'status_message'] = bigip.status_message
+        # Policy - if any BIG-IP are active we're operational
+        if self.get_active_bigips():
+            self.operational = True
         else:
-            local_ips = self.network_builder.initialize_tunneling()
-        self._init_agent_config(local_ips)
+            self.operational = False
+        if self.agent_report_state:
+            self.agent_report_state(force_resync=force_resync)
+
+    # these are the refactored methods
+    def get_active_bigips(self):
+        return self.get_all_bigips()
 
     def post_init(self):
         """ Run and Post Initialization Tasks """
@@ -350,7 +381,7 @@ class iControlDriver(LBaaSBaseDriver):
 
     def _init_bigip_managers(self):
         """ Setup the managers that create big-ip configurations. """
-        self.vcmp_manager = VcmpManager(self)
+        # self.vcmp_manager = VcmpManager(self)
         self.tenant_manager = BigipTenantManager(
             self.conf, self)
 
@@ -441,6 +472,22 @@ class iControlDriver(LBaaSBaseDriver):
                 uuid.uuid5(uuid.NAMESPACE_DNS, self.hostnames[0])
             )
 
+        # initialize per host agent_configurations
+        for hostname in self.hostnames:
+            self.__bigips[hostname] = bigip = type('', (), {})()
+            bigip.hostname = hostname
+            bigip.status = 'creating'
+            bigip.status_message = 'creating BIG-IP from iControl hostnames'
+            self.agent_configurations[
+                'icontrol_endpoints'][hostname] = {}
+            self.agent_configurations[
+                'icontrol_endpoints'][hostname]['failover_state'] = \
+                'undiscovered'
+            self.agent_configurations[
+                'icontrol_endpoints'][hostname]['status'] = 'unknown'
+            self.agent_configurations[
+                'icontrol_endpoints'][hostname]['status_message'] = ''
+
     def _init_bigips(self):
         """ Connect to all BIG-IPs """
         if self.connected:
@@ -461,146 +508,216 @@ class iControlDriver(LBaaSBaseDriver):
                 requests_log.propagate = True
 
             self.__last_connect_attempt = datetime.datetime.now()
-            if self.conf.icontrol_connection_timeout:
-                f5const.CONNECTION_TIMEOUT = \
-                    self.conf.icontrol_connection_timeout
-
-            first_bigip = self._open_bigip(self.hostnames[0])
-            self._init_bigip(first_bigip, self.hostnames[0], None)
-            self.__bigips[self.hostnames[0]] = first_bigip
-
-            device_group_name = self._validate_ha(first_bigip)
-            self._init_traffic_groups(first_bigip)
-
-            # connect to the rest of the devices
-            for hostname in self.hostnames[1:]:
+            for hostname in self.hostnames:
+                # connect to each BIG-IP and set it status
                 bigip = self._open_bigip(hostname)
-                self._init_bigip(bigip, hostname, device_group_name)
-                self.__bigips[hostname] = bigip
-
+                if bigip.status == 'active':
+                    # set the status down until we assure initialized
+                    bigip.status = 'initializing'
+                    bigip.status_message = 'initializing HA viability'
+                    LOG.debug('initializing HA viability %s' % hostname)
+                    device_group_name = None
+                    if not self.ha_validated:
+                        device_group_name = self._validate_ha(bigip)
+                        LOG.debug('HA validated from %s with DSG %s' %
+                                  (hostname, device_group_name))
+                        self.ha_validated = True
+                    if not self.tg_initialized:
+                        self._init_traffic_groups(bigip)
+                        LOG.debug('learned traffic groups from %s as %s' %
+                                  (hostname, self.__traffic_groups))
+                        self.tg_initialized = True
+                    LOG.debug('initializing bigip %s' % hostname)
+                    self._init_bigip(bigip, hostname, device_group_name)
+                    LOG.debug('initializing agent configurations %s'
+                              % hostname)
+                    self._init_agent_config(bigip)
+                    # Assure basic BIG-IP HA is operational
+                    LOG.debug('validating HA state for %s' % hostname)
+                    bigip.status = 'validating_HA'
+                    bigip.status_message = 'validating the current HA state'
+                    if self._validate_ha(bigip):
+                        LOG.debug('setting status to active for %s' % hostname)
+                        bigip.status = 'active'
+                        bigip.status_message = 'BIG-IP ready for provisioning'
+                        # self._post_init()
+                    else:
+                        LOG.debug('setting status to error for %s' % hostname)
+                        bigip.status = 'error'
+                        bigip.status_message = 'BIG-IP is not operational'
+                        self._set_agent_status(False)
+                else:
+                    LOG.error('error opening BIG-IP %s - %s:%s'
+                              % (hostname, bigip.status, bigip.status_message))
+                    self._set_agent_status(False)
             self.connected = True
-
-        except NeutronException as exc:
-            LOG.error(_('Could not communicate with all ' +
-                        'iControl devices: %s' % exc.msg))
-            greenthread.sleep(5)
-            raise
         except Exception as exc:
-            LOG.error(_('Could not communicate with all ' +
-                        'iControl devices: %s' % exc.message))
-            greenthread.sleep(5)
+            LOG.error('Invalid agent configuration: %s' % exc.message)
             raise
+        self._set_agent_status(force_resync=True)
 
     def _open_bigip(self, hostname):
-        """ Open bigip connection """
-        LOG.info(_('Opening iControl connection to %s @ %s' %
-                   (self.conf.icontrol_username, hostname)))
-        return f5_bigip.BigIP(hostname, self.conf.icontrol_username,
-                              self.conf.icontrol_password,
-                              f5const.CONNECTION_TIMEOUT)
+        # Open bigip connection """
+        try:
+            bigip = self.__bigips[hostname]
+            if bigip.status not in ['creating', 'error']:
+                LOG.debug('BIG-IP %s status invalid %s to open a connection'
+                          % (hostname, bigip.status))
+                return bigip
+            bigip.status = 'connecting'
+            bigip.status_message = 'requesting iControl endpoint'
+            LOG.info('opening iControl connection to %s @ %s' %
+                     (self.conf.icontrol_username, hostname))
+            bigip = f5_bigip.BigIP(hostname, self.conf.icontrol_username,
+                                   self.conf.icontrol_password,
+                                   f5const.CONNECTION_TIMEOUT)
+            bigip.status = 'active'
+            bigip.hostname = hostname
+            bigip.status_message = 'connected to BIG-IP'
+            self.__bigips[hostname] = bigip
+            return bigip
+
+        except Exception as exc:
+            LOG.exception('could not communicate with ' +
+                          'iControl device: %s' % hostname)
+            errbigip = type('', (), {})()
+            errbigip.hostname = hostname
+            errbigip.status = 'error'
+            errbigip.status_message = str(exc)[:80]
+            self.__bigips[hostname] = errbigip
+            return errbigip
 
     def _init_bigip(self, bigip, hostname, check_group_name=None):
         """ Prepare a bigip for usage """
-        bigip.system.set_folder('/Common')
-        major_version, minor_version = _validate_bigip_version(bigip, hostname)
+        try:
+            bigip.system.set_folder('/Common')
+            major_version, minor_version = _validate_bigip_version(bigip, hostname)
 
-        extramb = bigip.system.get_provision_extramb()
-        if int(extramb) < f5const.MIN_EXTRA_MB:
-            raise f5ex.ProvisioningExtraMBValidateFailed(
-                'Device %s BIG-IP not provisioned for '
-                'management LARGE.' % hostname)
+            extramb = bigip.system.get_provision_extramb()
+            if int(extramb) < f5const.MIN_EXTRA_MB:
+                raise f5ex.ProvisioningExtraMBValidateFailed(
+                    'Device %s BIG-IP not provisioned for '
+                    'management LARGE.' % hostname)
 
-        if self.conf.f5_ha_type == 'pair' and \
-                bigip.cluster.get_sync_status() == 'Standalone':
-            raise f5ex.BigIPClusterInvalidHA(
-                'HA mode is pair and bigip %s in standalone mode'
-                % hostname)
-
-        if self.conf.f5_ha_type == 'scalen' and \
-                bigip.cluster.get_sync_status() == 'Standalone':
-            raise f5ex.BigIPClusterInvalidHA(
-                'HA mode is pair and bigip %s in standalone mode'
-                % hostname)
-
-        if self.conf.f5_ha_type != 'standalone':
-            device_group_name = bigip.device.get_device_group()
-            if not device_group_name:
+            if self.conf.f5_ha_type == 'pair' and \
+                    bigip.cluster.get_sync_status() == 'Standalone':
                 raise f5ex.BigIPClusterInvalidHA(
-                    'HA mode is %s and no sync failover '
-                    'device group found for device %s.'
-                    % (self.conf.f5_ha_type, hostname))
-            if check_group_name and device_group_name != check_group_name:
+                    'HA mode is pair and bigip %s in standalone mode'
+                    % hostname)
+
+            if self.conf.f5_ha_type == 'scalen' and \
+                    bigip.cluster.get_sync_status() == 'Standalone':
                 raise f5ex.BigIPClusterInvalidHA(
-                    'Invalid HA. Device %s is in device group'
-                    ' %s but should be in %s.'
-                    % (hostname, device_group_name, check_group_name))
-            bigip.device_group_name = device_group_name
+                    'HA mode is pair and bigip %s in standalone mode'
+                    % hostname)
 
-        for network in self.conf.common_network_ids.values():
-            if not bigip.vlan.exists(network, folder='Common'):
-                raise f5ex.MissingNetwork(_(
-                    'Common network %s on %s does not exist'
-                    % (network, bigip.icontrol.hostname)))
+            if self.conf.f5_ha_type != 'standalone':
+                device_group_name = bigip.device.get_device_group()
+                if not device_group_name:
+                    raise f5ex.BigIPClusterInvalidHA(
+                        'HA mode is %s and no sync failover '
+                        'device group found for device %s.'
+                        % (self.conf.f5_ha_type, hostname))
+                if check_group_name and device_group_name != check_group_name:
+                    raise f5ex.BigIPClusterInvalidHA(
+                        'Invalid HA. Device %s is in device group'
+                        ' %s but should be in %s.'
+                        % (hostname, device_group_name, check_group_name))
+                bigip.device_group_name = device_group_name
 
-        if self.conf.icontrol_config_mode == 'iapp':
-            lbaas_iapp.check_install_iapp(bigip)
+            for network in self.conf.common_network_ids.values():
+                if not bigip.vlan.exists(network, folder='Common'):
+                    raise f5ex.MissingNetwork(_(
+                        'Common network %s on %s does not exist'
+                        % (network, bigip.icontrol.hostname)))
 
-        bigip.device_name = bigip.device.get_device_name()
-        bigip.mac_addresses = bigip.interface.get_mac_addresses()
-        bigip.device_interfaces = \
-            bigip.interface.get_interface_macaddresses_dict()
-        bigip.assured_networks = []
-        bigip.assured_tenant_snat_subnets = {}
-        bigip.assured_gateway_subnets = []
+            if self.conf.icontrol_config_mode == 'iapp':
+                lbaas_iapp.check_install_iapp(bigip)
 
-        if self.conf.f5_ha_type != 'standalone':
-            if self.conf.f5_sync_mode == 'autosync':
-                bigip.cluster.enable_auto_sync(device_group_name)
-            else:
-                bigip.cluster.disable_auto_sync(device_group_name)
+            bigip.device_name = bigip.device.get_device_name()
+            bigip.mac_addresses = bigip.interface.get_mac_addresses()
+            bigip.device_interfaces = \
+                bigip.interface.get_interface_macaddresses_dict()
+            bigip.assured_networks = []
+            bigip.assured_tenant_snat_subnets = {}
+            bigip.assured_gateway_subnets = []
 
-        # Turn off tunnel syncing... our VTEPs are local SelfIPs
-        if bigip.system.get_tunnel_sync() == 'enable':
-            bigip.system.set_tunnel_sync(enabled=False)
+            if self.conf.f5_ha_type != 'standalone':
+                if self.conf.f5_sync_mode == 'autosync':
+                    bigip.cluster.enable_auto_sync(device_group_name)
+                else:
+                    bigip.cluster.disable_auto_sync(device_group_name)
 
-        LOG.debug(_('Connected to iControl %s @ %s ver %s.%s'
-                    % (self.conf.icontrol_username, hostname,
-                       major_version, minor_version)))
+            # Turn off tunnel syncing... our VTEPs are local SelfIPs
+            if bigip.system.get_tunnel_sync() == 'enable':
+                bigip.system.set_tunnel_sync(enabled=False)
+
+            LOG.debug(_('Connected to iControl %s @ %s ver %s.%s'
+                        % (self.conf.icontrol_username, hostname,
+                           major_version, minor_version)))
+        except Exception as exc:
+            bigip.status = 'error'
+            bigip.status_message = str(exc)[:80]
+            raise
         return bigip
 
-    def _validate_ha(self, first_bigip):
+    def _validate_ha(self, bigip):
         """ if there was only one address supplied and
             this is not a standalone device, get the
             devices trusted by this device. """
-        device_group_name = None
+        # device_group_name = None
+        # if self.conf.f5_ha_type == 'standalone':
+        #     if len(self.hostnames) != 1:
+        #         raise f5ex.BigIPClusterInvalidHA(
+        #             'HA mode is standalone and %d hosts found.'
+        #             % len(self.hostnames))
+        # elif self.conf.f5_ha_type == 'pair':
+        #     device_group_name = first_bigip.device.get_device_group()
+        #     if len(self.hostnames) != 2:
+        #         mgmt_addrs = []
+        #         devices = first_bigip.cluster.devices(device_group_name)
+        #         for device in devices:
+        #             mgmt_addrs.append(
+        #                 first_bigip.device.get_mgmt_addr_by_device(device))
+        #         self.hostnames = mgmt_addrs
+        #     if len(self.hostnames) != 2:
+        #         raise f5ex.BigIPClusterInvalidHA(
+        #             'HA mode is pair and %d hosts found.'
+        #             % len(self.hostnames))
+        # elif self.conf.f5_ha_type == 'scalen':
+        #     device_group_name = first_bigip.device.get_device_group()
+        #     if len(self.hostnames) < 2:
+        #         mgmt_addrs = []
+        #         devices = first_bigip.cluster.devices(device_group_name)
+        #         for device in devices:
+        #             mgmt_addrs.append(
+        #                 first_bigip.device.get_mgmt_addr_by_device(device))
+        #         self.hostnames = mgmt_addrs
+        # return device_group_name
+
         if self.conf.f5_ha_type == 'standalone':
-            if len(self.hostnames) != 1:
-                raise f5ex.BigIPClusterInvalidHA(
-                    'HA mode is standalone and %d hosts found.'
-                    % len(self.hostnames))
-        elif self.conf.f5_ha_type == 'pair':
-            device_group_name = first_bigip.device.get_device_group()
-            if len(self.hostnames) != 2:
-                mgmt_addrs = []
-                devices = first_bigip.cluster.devices(device_group_name)
-                for device in devices:
-                    mgmt_addrs.append(
-                        first_bigip.device.get_mgmt_addr_by_device(device))
-                self.hostnames = mgmt_addrs
-            if len(self.hostnames) != 2:
-                raise f5ex.BigIPClusterInvalidHA(
-                    'HA mode is pair and %d hosts found.'
-                    % len(self.hostnames))
-        elif self.conf.f5_ha_type == 'scalen':
-            device_group_name = first_bigip.device.get_device_group()
-            if len(self.hostnames) < 2:
-                mgmt_addrs = []
-                devices = first_bigip.cluster.devices(device_group_name)
-                for device in devices:
-                    mgmt_addrs.append(
-                        first_bigip.device.get_mgmt_addr_by_device(device))
-                self.hostnames = mgmt_addrs
-        return device_group_name
+            return True
+        else:
+            # how many active BIG-IPs are there?
+            active_bigips = self.get_active_bigips()
+            if active_bigips:
+                sync_status = bigip.cluster.get_sync_status()
+                if sync_status in ['Disconnected', 'Sync Failure']:
+                    if len(active_bigips) > 1:
+                        # the device should not be in the disconnected state
+                        return False
+                if len(active_bigips) > 1:
+                    # it should be in the same sync-failover group
+                    # as the rest of the active bigips
+                    device_group_name = \
+                        bigip.device.get_device_group()
+                    for ab in active_bigips:
+                        adgn = ab.device.get_device_group()
+                        if not adgn == device_group_name:
+                            return False
+                return True
+            else:
+                return True
 
     def _init_agent_config(self, local_ips):
         """ Init agent config """
@@ -612,6 +729,9 @@ class iControlDriver(LBaaSBaseDriver):
             ic_host['device_name'] = hostbigip.device_name
             ic_host['platform'] = hostbigip.system.get_platform()
             ic_host['serial_number'] = hostbigip.system.get_serial_number()
+            ic_host['status'] = hostbigip.status
+            ic_host['status_message'] = hostbigip.status_message
+            ic_host['failover_state'] = hostbigip.device.get_failover_state()
             icontrol_endpoints[host] = ic_host
 
         self.agent_configurations['tunneling_ips'] = local_ips
@@ -620,6 +740,26 @@ class iControlDriver(LBaaSBaseDriver):
         if self.bigip_l2_manager:
             self.agent_configurations['bridge_mappings'] = \
                 self.bigip_l2_manager.interface_mapping
+
+        # # Init agent config
+        # ic_host = {}
+        # ic_host['version'] = self.system_helper.get_version(bigip)
+        # ic_host['device_name'] = bigip.device_name
+        # ic_host['platform'] = self.system_helper.get_platform(bigip)
+        # ic_host['serial_number'] = self.system_helper.get_serial_number(bigip)
+        # ic_host['status'] = bigip.status
+        # ic_host['status_message'] = bigip.status_message
+        # ic_host['failover_state'] = self.get_failover_state(bigip)
+        # if bigip.local_ip:
+        #     ic_host['local_ip'] = bigip.local_ip
+        # else:
+        #     ic_host['local_ip'] = 'VTEP disabled'
+        #     self.agent_configurations['tunnel_types'] = 'None'
+        # self.agent_configurations['icontrol_endpoints'][bigip.hostname] = \
+        #     ic_host
+        # if self.network_builder:
+        #     self.agent_configurations['bridge_mappings'] = \
+        #         self.network_builder.interface_mapping
 
     def generate_capacity_score(self, capacity_policy=None):
         """ Generate the capacity score of connected devices """

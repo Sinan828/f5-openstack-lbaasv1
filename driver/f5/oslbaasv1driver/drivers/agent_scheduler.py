@@ -87,6 +87,46 @@ class TenantScheduler(agent_scheduler.ChanceScheduler):
                     return {'agent': env_agents[0]}
             return lbaas_agent
 
+    def rebind_pools(
+            self, plugin, context, env, group, current_agent):
+        env_agents = self.get_agents_in_env(context, plugin, env,
+                                            group=group, active=True)
+        if env_agents:
+            reassigned_agent = env_agents[0]
+            bindings = \
+                context.session.query(
+                    agent_scheduler.PoolLoadbalancerAgentBinding).filter_by(
+                        agent_id=current_agent['id']).all()
+            for binding in bindings:
+                binding.agent_id = reassigned_agent['id']
+                context.session.add(binding)
+            LOG.debug("%s Pools bound to agent %s now bound to %s" %
+                      (len(bindings),
+                       current_agent['id'],
+                       reassigned_agent['id']))
+            return reassigned_agent
+        else:
+            return None
+
+    def get_dead_agents_in_env(self, plugin, context, env, group=None):
+        return_agents = []
+        all_agents = self.get_agents_in_env(plugin,
+                                            context,
+                                            env,
+                                            group,
+                                            active=None)
+
+        for agent in all_agents:
+            if not plugin.is_eligible_agent(active=True, agent=agent):
+                if not agent['admin_state_up']:
+                    return_agents.append(agent)
+        return return_agents
+
+    def scrub_dead_agents(self, plugin, context, env, group=None):
+        dead_agents = self.get_dead_agents_in_env(plugin, context, env, group)
+        for agent in dead_agents:
+            self.rebind_pools(plugin, context, env, group, agent)
+
     def get_active_agents_in_env(self, plugin, context, env, group=None):
         with context.session.begin(subtransactions=True):
             candidates = plugin.get_lbaas_agents(context, active=True)
@@ -106,7 +146,7 @@ class TenantScheduler(agent_scheduler.ChanceScheduler):
                                 return_agents.append(candidate)
             return return_agents
 
-    def get_agents_in_env(self, plugin, context, env, group=None):
+    def get_agents_in_env(self, plugin, context, env, group=None, active=None):
         with context.session.begin(subtransactions=True):
             candidates = plugin.get_lbaas_agents(context)
             return_agents = []
