@@ -110,6 +110,11 @@ OPTS = [
     cfg.DictOpt(
         'capacity_policy', default={},
         help=_('Metrics to measure capacity and their limits.')
+    ),
+    cfg.StrOpt(
+        'agent_id',
+        default=None,
+        help=_('Agent ID')
     )
 ]
 
@@ -227,9 +232,14 @@ class LbaasAgentManagerBase(periodic_task.PeriodicTasks):
             self.lbdriver = importutils.import_object(
                 conf.f5_bigip_lbaas_device_driver, self.conf)
             if self.lbdriver.agent_id:
-                self.agent_host = conf.host + ":" + self.lbdriver.agent_id
-                self.lbdriver.agent_host = self.agent_host
-                LOG.debug('setting agent host to %s' % self.agent_host)
+                if conf.agent_id:
+                    self.agent_host = conf.agent_id
+                    self.lbdriver.agent_host = self.agent_host
+                    LOG.debug('setting agent host to %s' % self.agent_host)
+                else:
+                    self.agent_host = conf.host + ":" + self.lbdriver.agent_id
+                    self.lbdriver.agent_host = self.agent_host
+                    LOG.debug('setting agent host to %s' % self.agent_host)
             else:
                 self.agent_host = None
                 LOG.error(_('Driver did not initialize. Fix the driver config '
