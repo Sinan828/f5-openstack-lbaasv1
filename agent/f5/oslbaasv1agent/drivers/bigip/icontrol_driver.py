@@ -546,11 +546,9 @@ class iControlDriver(LBaaSBaseDriver):
         bigip.assured_tenant_snat_subnets = {}
         bigip.assured_gateway_subnets = []
 
+        # disable device group autosync
         if self.conf.f5_ha_type != 'standalone':
-            if self.conf.f5_sync_mode == 'autosync':
-                bigip.cluster.enable_auto_sync(device_group_name)
-            else:
-                bigip.cluster.disable_auto_sync(device_group_name)
+            bigip.cluster.disable_auto_sync(device_group_name)
 
         # Turn off tunnel syncing... our VTEPs are local SelfIPs
         if bigip.system.get_tunnel_sync() == 'enable':
