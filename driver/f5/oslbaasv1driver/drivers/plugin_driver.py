@@ -30,6 +30,8 @@ from neutron.context import get_admin_context
 from neutron.extensions import portbindings
 from neutron.common import log
 import f5.oslbaasv1driver.drivers.constants as lbaasv1constants
+from neutron.plugins.ml2 import db
+from neutron.plugins.ml2 import driver_api as api
 
 PREJUNO = False
 PREKILO = False
@@ -1444,6 +1446,13 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             vip['port_id'],
             {'port': port_data}
         )
+
+        LOG.debug('create vip, update vip network vxlan to vlan')
+        segment_data = self.get_segment(context, vip['port_id'], agent['host'])
+        if segment_data:
+            service['vip']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['vip']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['vip']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_vip(context, vip, service, agent['host'])
 
@@ -1575,12 +1584,41 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             host=agent['host']
         )
         LOG.debug("get_service took %.5f secs" % (time() - start_time))
-
         this_member_count = 0
+        fake_port_name = None
         for service_member in service['members']:
             if service_member['address'] == member['address'] and \
                service_member['protocol_port'] == member['protocol_port']:
                 this_member_count += 1
+                LOG.debug('create member, create fake port for member')
+                port = {'port': {'tenant_id': service_member['tenant_id'],
+                                 'network_id': service_member['network']['id'],
+                                 'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                                 'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                                 'device_id': service_member['id'],
+                                 'device_owner': 'network:f5lbaas',
+                                 'admin_state_up': service_member['admin_state_up'],
+                                 'name': 'fake_port_' + service_member['id'],
+                                 portbindings.HOST_ID: agent['host']}}
+                member_fake_port = self._core_plugin().create_port(
+                    context, port)
+                fake_port_name = port['port']['name']
+        LOG.debug('create member, update member fake port status')
+        self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug('create member, filter port by member fake port id')
+        fake_port = self.callbacks.get_port_by_name(context, port_name=fake_port_name)
+        if len(fake_port) > 0:
+            fake_port = fake_port[0]
+        LOG.debug('create member, update member network vxlan to vlan')
+        segment_data = self.get_segment(context, fake_port['id'], agent['host'])
+        if segment_data:
+            for service_member in service['members']:
+                if service_member['address'] == member['address'] and \
+                        service_member['protocol_port'] == member['protocol_port']:
+                    service_member['network']['provider:network_type'] = constants.TYPE_VLAN
+                    service_member['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+                    service_member['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+
         if this_member_count > 1:
             status_description = 'duplicate member %s:%s found in pool %s' \
                 % (
@@ -1598,6 +1636,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_member(context, member, service, agent['host'])
+        LOG.debug('create member, delete member fake port after rpc process')
+        self._core_plugin().delete_port(context, fake_port['id'])
+        LOG.debug('create member, delete member fake port successful')
 
     @log.log
     def update_member(self, context, old_member, member):
@@ -1758,6 +1799,18 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         self.agent_rpc.delete_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
+
+    def get_segment(self, context, port_id, host_id):
+        try:
+            levels = db.get_binding_levels(context.session, port_id, host_id)
+            for level in levels:
+                segment = db.get_segment_by_id(context.session, level.segment_id)
+                if segment and segment.get(api.NETWORK_TYPE) == constants.TYPE_VLAN:
+                    LOG.debug("segment id is %s", segment)
+                    return segment
+        except Exception as exc:
+            LOG.error("could not get segment id by port %s and host %s, %s" % (port_id, host_id, exc.message))
+        return None
 
     @log.log
     def stats(self, context, pool_id):

@@ -353,6 +353,18 @@ class BigipPoolManager(object):
                               (time() - start_time))
             using_ratio = True
 
+        if member['weight'] == 1:
+            start_time = time()
+            set_ratio = bigip.pool.set_member_ratio
+            set_ratio(name=pool['id'],
+                      ip_address=ip_address,
+                      port=member_port,
+                      ratio=int(member['weight']),
+                      folder=pool['tenant_id'],
+                      no_checks=True)
+            if time() - start_time > .0001:
+                LOG.debug("            member set ratio took %.5f secs" %
+                          (time() - start_time))
         return using_ratio
 
     def _assure_bigip_delete_member(self, bigip,
