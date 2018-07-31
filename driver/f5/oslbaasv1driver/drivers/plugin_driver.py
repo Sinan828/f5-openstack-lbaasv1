@@ -1810,7 +1810,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                     return segment
         except Exception as exc:
             LOG.error("could not get segment id by port %s and host %s, %s" % (port_id, host_id, exc.message))
-        return None
+            return
 
     @log.log
     def stats(self, context, pool_id):
