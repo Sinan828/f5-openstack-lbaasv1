@@ -1473,6 +1473,12 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        LOG.debug('update vip, update vip network vxlan to vlan')
+        segment_data = self.get_segment(context, vip['port_id'], agent['host'])
+        if segment_data:
+            service['vip']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['vip']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['vip']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_vip(context, old_vip, vip,
@@ -1493,6 +1499,12 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        LOG.debug('delete vip, update vip network vxlan to vlan')
+        segment_data = self.get_segment(context, vip['port_id'], agent['host'])
+        if segment_data:
+            service['vip']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['vip']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['vip']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_vip(context, vip, service, agent['host'])
@@ -1515,8 +1527,35 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        # create_fake port for the pool network
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("create pool, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("create pool, the fake port: %s", pool_fake_port)
+        LOG.debug("create pool, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("create pool, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool(context, pool, service, agent['host'])
+        LOG.debug('create pool, delete pool fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('create pool, delete pool fake port successful')
+
 
     @log.log
     def update_pool(self, context, old_pool, pool):
@@ -1536,10 +1575,36 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        # create_fake port for the pool network
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("update pool, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("update pool, the fake port: %s", pool_fake_port)
+        LOG.debug("create pool, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("update pool, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_pool(context, old_pool, pool,
                                    service, agent['host'])
+        LOG.debug('update pool, delete pool fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('update pool, delete pool fake port successful')
 
     @log.log
     def delete_pool(self, context, pool):
@@ -1560,9 +1625,35 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        # create_fake port for the pool network
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("delete pool, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("delete pool, the fake port: %s", pool_fake_port)
+        LOG.debug("delete pool, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("delete pool, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool(context, pool, service, agent['host'])
+        LOG.debug('delete pool, delete pool fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('delete pool, delete pool fake port successful')
 
     @log.log
     def create_member(self, context, member):
@@ -1585,7 +1676,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         )
         LOG.debug("get_service took %.5f secs" % (time() - start_time))
         this_member_count = 0
-        fake_port_name = None
+        member_fake_port = None
         for service_member in service['members']:
             if service_member['address'] == member['address'] and \
                service_member['protocol_port'] == member['protocol_port']:
@@ -1602,15 +1693,10 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                                  portbindings.HOST_ID: agent['host']}}
                 member_fake_port = self._core_plugin().create_port(
                     context, port)
-                fake_port_name = port['port']['name']
         LOG.debug('create member, update member fake port status')
         self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
-        LOG.debug('create member, filter port by member fake port id')
-        fake_port = self.callbacks.get_port_by_name(context, port_name=fake_port_name)
-        if len(fake_port) > 0:
-            fake_port = fake_port[0]
         LOG.debug('create member, update member network vxlan to vlan')
-        segment_data = self.get_segment(context, fake_port['id'], agent['host'])
+        segment_data = self.get_segment(context, member_fake_port['id'], agent['host'])
         if segment_data:
             for service_member in service['members']:
                 if service_member['address'] == member['address'] and \
@@ -1637,7 +1723,7 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_member(context, member, service, agent['host'])
         LOG.debug('create member, delete member fake port after rpc process')
-        self._core_plugin().delete_port(context, fake_port['id'])
+        self._core_plugin().delete_port(context, member_fake_port['id'])
         LOG.debug('create member, delete member fake port successful')
 
     @log.log
@@ -1664,9 +1750,41 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             host=agent['host']
         )
 
+        member_fake_port = None
+        for service_member in service['members']:
+            if service_member['address'] == member['address'] and \
+                    service_member['protocol_port'] == member['protocol_port']:
+                LOG.debug('update member, create fake port for member')
+                port = {'port': {'tenant_id': service_member['tenant_id'],
+                                 'network_id': service_member['network']['id'],
+                                 'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                                 'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                                 'device_id': service_member['id'],
+                                 'device_owner': 'network:f5lbaas',
+                                 'admin_state_up': service_member['admin_state_up'],
+                                 'name': 'fake_port_' + service_member['id'],
+                                 portbindings.HOST_ID: agent['host']}}
+                member_fake_port = self._core_plugin().create_port(
+                    context, port)
+                fake_port_name = port['port']['name']
+        LOG.debug('update member, update member fake port status')
+        self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug('update member, update member network vxlan to vlan')
+        segment_data = self.get_segment(context, member_fake_port['id'], agent['host'])
+        if segment_data:
+            for service_member in service['members']:
+                if service_member['address'] == member['address'] and \
+                        service_member['protocol_port'] == member['protocol_port']:
+                    service_member['network']['provider:network_type'] = constants.TYPE_VLAN
+                    service_member['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+                    service_member['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_member(context, old_member, member,
                                      service, agent['host'])
+        LOG.debug('update member, delete member fake port after rpc process')
+        self._core_plugin().delete_port(context, member_fake_port['id'])
+        LOG.debug('update member, delete member fake port successful')
 
         # if they moved members between pools, we need to send
         # a service call to update the old pool to remove
@@ -1682,10 +1800,37 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             for service_member in old_pool_service['members']:
                 if service_member['id'] == old_member['id']:
                     service_member['status'] = 'MOVING'
+                    LOG.debug('update member, create fake port for member')
+                    port = {'port': {'tenant_id': service_member['tenant_id'],
+                                     'network_id': service_member['network']['id'],
+                                     'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                                     'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                                     'device_id': service_member['id'],
+                                     'device_owner': 'network:f5lbaas',
+                                     'admin_state_up': service_member['admin_state_up'],
+                                     'name': 'fake_port_' + service_member['id'],
+                                     portbindings.HOST_ID: agent['host']}}
+                    member_fake_port = self._core_plugin().create_port(
+                        context, port)
+                    fake_port_name = port['port']['name']
+            LOG.debug('update member, update member fake port status')
+            self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+            LOG.debug('update member, update member network vxlan to vlan')
+            segment_data = self.get_segment(context, member_fake_port['id'], agent['host'])
+            if segment_data:
+                for service_member in service['members']:
+                    if service_member['address'] == member['address'] and \
+                            service_member['protocol_port'] == member['protocol_port']:
+                        service_member['network']['provider:network_type'] = constants.TYPE_VLAN
+                        service_member['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+                        service_member['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
             self.agent_rpc.update_member(
                 context, old_member, member,
                 old_pool_service, agent['host']
             )
+            LOG.debug('update member, delete member fake port after rpc process')
+            self._core_plugin().delete_port(context, member_fake_port['id'])
+            LOG.debug('update member, delete member fake port successful')
 
     @log.log
     def delete_member(self, context, member):
@@ -1705,10 +1850,41 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        member_fake_port = None
+        for service_member in service['members']:
+            if service_member['address'] == member['address'] and \
+                    service_member['protocol_port'] == member['protocol_port']:
+                LOG.debug('update member, create fake port for member')
+                port = {'port': {'tenant_id': service_member['tenant_id'],
+                                 'network_id': service_member['network']['id'],
+                                 'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                                 'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                                 'device_id': service_member['id'],
+                                 'device_owner': 'network:f5lbaas',
+                                 'admin_state_up': service_member['admin_state_up'],
+                                 'name': 'fake_port_' + service_member['id'],
+                                 portbindings.HOST_ID: agent['host']}}
+                member_fake_port = self._core_plugin().create_port(
+                    context, port)
+                fake_port_name = port['port']['name']
+        LOG.debug('delete member, update member fake port status')
+        self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug('delete member, update member network vxlan to vlan')
+        segment_data = self.get_segment(context, member_fake_port['id'], agent['host'])
+        if segment_data:
+            for service_member in service['members']:
+                if service_member['address'] == member['address'] and \
+                        service_member['protocol_port'] == member['protocol_port']:
+                    service_member['network']['provider:network_type'] = constants.TYPE_VLAN
+                    service_member['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+                    service_member['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_member(context, member,
                                      service, agent['host'])
+        LOG.debug('delete member, delete member fake port after rpc process')
+        self._core_plugin().delete_port(context, member_fake_port['id'])
+        LOG.debug('delete member, delete member fake port successful')
 
     @log.log
     def create_pool_health_monitor(self, context, health_monitor, pool_id):
@@ -1726,11 +1902,36 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("create monitor, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("create monitor, the fake port: %s", pool_fake_port)
+        LOG.debug("create monitor, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("create monitor, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
+        LOG.debug('create monitor, delete monitor fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('create monitor, delete monitor fake port successful')
 
     @log.log
     def update_pool_health_monitor(self, context, old_health_monitor,
@@ -1749,11 +1950,35 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-
-        # call the RPC proxy with the constructed message
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("update monitor, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("update monitor, the fake port: %s", pool_fake_port)
+        LOG.debug("update monitor, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("update monitor, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
                                              service, agent['host'])
+        LOG.debug('update monitor, delete monitor fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('update monitor, delete monitor fake port successful')
 
     @log.log
     def update_health_monitor(self, context, old_health_monitor,
@@ -1772,11 +1997,35 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("update monitor, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("update monitor, the fake port: %s", pool_fake_port)
+        LOG.debug("update monitor, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("update monitor, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
                                              service, agent['host'])
+        LOG.debug('update monitor, delete monitor fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('update monitor, delete monitor fake port successful')
 
     @log.log
     def delete_pool_health_monitor(self, context, health_monitor, pool_id):
@@ -1794,11 +2043,35 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             global_routed_mode=self._is_global_routed(agent),
             host=agent['host']
         )
-
+        subnet = self._core_plugin().get_subnet(context, pool['subnet_id'])
+        LOG.debug("update monitor, begin create fake port.")
+        port = {'port': {'tenant_id': subnet['tenant_id'],
+                         'network_id': subnet['network_id'],
+                         'mac_address': attributes.ATTR_NOT_SPECIFIED,
+                         'fixed_ips': attributes.ATTR_NOT_SPECIFIED,
+                         'device_id': pool['id'],
+                         'device_owner': 'network:f5lbaas',
+                         'admin_state_up': pool['admin_state_up'],
+                         'name': 'fake_port_' + pool['id'],
+                         portbindings.HOST_ID: agent['host']}}
+        pool_fake_port = self._core_plugin().create_port(
+            context, port)
+        LOG.debug("delete monitor, the fake port: %s", pool_fake_port)
+        LOG.debug("delete monitor, begin update port status active.")
+        self._core_plugin().update_port_status(context, pool_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
+        LOG.debug("delete monitor, begin update network type.")
+        segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
+        if segment_data:
+            service['pool']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
+        LOG.debug('delete monitor, delete monitor fake port after rpc process')
+        self._core_plugin().delete_port(context, pool_fake_port['id'])
+        LOG.debug('delete monitor, delete monitor fake port successful')
 
     def get_segment(self, context, port_id, host_id):
         try:
@@ -1807,6 +2080,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                 segment = db.get_segment_by_id(context.session, level.segment_id)
                 if segment and segment.get(api.NETWORK_TYPE) == constants.TYPE_VLAN:
                     LOG.debug("segment id is %s", segment)
+                    return segment
+                else:
+                    LOG.debug("segment id is None, port id is: %s" % port_id)
                     return segment
         except Exception as exc:
             LOG.error("could not get segment id by port %s and host %s, %s" % (port_id, host_id, exc.message))
