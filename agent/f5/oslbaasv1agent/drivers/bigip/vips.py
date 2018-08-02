@@ -330,22 +330,22 @@ class BigipVipManager(object):
             set_persist(name=vip['id'],
                         profile_name=profile_name,
                         folder=vip['tenant_id'])
-            if pool['lb_method'] == 'SOURCE_IP':
-                profile_name = '/Common/source_addr'
-                set_fallback_persist(name=vip['id'],
-                                     profile_name=profile_name,
-                                     folder=vip['tenant_id'])
+            # if pool['lb_method'] == 'SOURCE_IP':
+            #     profile_name = '/Common/source_addr'
+            #     set_fallback_persist(name=vip['id'],
+            #                          profile_name=profile_name,
+            #                          folder=vip['tenant_id'])
         else:
             # if they did not supply a cookie_name
             # just default to regualar cookie peristence
             set_persist(name=vip['id'],
                         profile_name='/Common/cookie',
                         folder=vip['tenant_id'])
-            if pool['lb_method'] == 'SOURCE_IP':
-                profile_name = '/Common/source_addr'
-                set_fallback_persist(name=vip['id'],
-                                     profile_name=profile_name,
-                                     folder=vip['tenant_id'])
+            # if pool['lb_method'] == 'SOURCE_IP':
+            #     profile_name = '/Common/source_addr'
+            #     set_fallback_persist(name=vip['id'],
+            #                          profile_name=profile_name,
+            #                          folder=vip['tenant_id'])
 
     def _create_app_cookie_persist_rule(self, cookiename):
         """ Create rule for cookie persistence """

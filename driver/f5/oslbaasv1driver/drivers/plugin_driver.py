@@ -1547,9 +1547,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("create pool, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool(context, pool, service, agent['host'])
         LOG.debug('create pool, delete pool fake port after rpc process')
@@ -1595,9 +1595,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("update pool, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_pool(context, old_pool, pool,
@@ -1645,9 +1645,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("delete pool, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool(context, pool, service, agent['host'])
@@ -1766,7 +1766,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                                  portbindings.HOST_ID: agent['host']}}
                 member_fake_port = self._core_plugin().create_port(
                     context, port)
-                fake_port_name = port['port']['name']
         LOG.debug('update member, update member fake port status')
         self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
         LOG.debug('update member, update member network vxlan to vlan')
@@ -1812,7 +1811,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                                      portbindings.HOST_ID: agent['host']}}
                     member_fake_port = self._core_plugin().create_port(
                         context, port)
-                    fake_port_name = port['port']['name']
             LOG.debug('update member, update member fake port status')
             self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
             LOG.debug('update member, update member network vxlan to vlan')
@@ -1866,7 +1864,6 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
                                  portbindings.HOST_ID: agent['host']}}
                 member_fake_port = self._core_plugin().create_port(
                     context, port)
-                fake_port_name = port['port']['name']
         LOG.debug('delete member, update member fake port status')
         self._core_plugin().update_port_status(context, member_fake_port['id'], q_const.PORT_STATUS_ACTIVE)
         LOG.debug('delete member, update member network vxlan to vlan')
@@ -1921,9 +1918,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("create monitor, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
 
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_pool_health_monitor(context, health_monitor,
@@ -1969,9 +1966,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("update monitor, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
             # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
@@ -2016,9 +2013,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("update monitor, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.update_health_monitor(context, old_health_monitor,
                                              health_monitor, pool,
@@ -2062,9 +2059,9 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         LOG.debug("delete monitor, begin update network type.")
         segment_data = self.get_segment(context, pool_fake_port['id'], agent['host'])
         if segment_data:
-            service['pool']['provider:network_type'] = constants.TYPE_VLAN
-            service['pool']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
-            service['pool']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
+            service['pool']['network']['provider:network_type'] = constants.TYPE_VLAN
+            service['pool']['network']['provider:segmentation_id'] = segment_data[api.SEGMENTATION_ID]
+            service['pool']['network']['provider:physical_network'] = segment_data[api.PHYSICAL_NETWORK]
         # call the RPC proxy with the constructed message
         self.agent_rpc.delete_pool_health_monitor(context, health_monitor,
                                                   pool, service,

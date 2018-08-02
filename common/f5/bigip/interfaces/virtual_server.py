@@ -181,6 +181,7 @@ class VirtualServer(object):
             payload = dict()
             payload['name'] = name
             payload['partition'] = folder
+            payload['mirror'] = 'enabled'
             if str(ip_address).endswith('%0'):
                 ip_address = ip_address[:-2]
             if not port:
