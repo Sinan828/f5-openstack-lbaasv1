@@ -34,8 +34,10 @@ class BigipPoolManager(object):
         self.driver = driver
         self.bigip_l2_manager = bigip_l2_manager
 
-    def assure_bigip_pool_create(self, bigip, pool):
+    def assure_bigip_pool_create(self, bigip, service):
         """ Create pool on the bigip """
+        pool = service['pool']
+        vip = service['vip']
         if not pool['status'] == plugin_const.PENDING_DELETE:
             desc = pool['name'] + ':' + pool['description']
             bigip.pool.create(name=pool['id'],
@@ -44,6 +46,13 @@ class BigipPoolManager(object):
                               folder=pool['tenant_id'])
             if pool['status'] == plugin_const.PENDING_UPDATE:
                 # make sure pool attributes are correct
+                if 'id' in vip and not vip['session_persistence'] and pool['lb_method'] == 'SOURCE_IP':
+                    bigip.virtual_server.set_persist_profile(name=vip['id'],
+                                                             profile_name='/Common/source_addr',
+                                                             folder=vip['tenant_id'])
+                elif 'id' in vip and not vip['session_persistence']:
+                    bigip.virtual_server.remove_all_persist_profiles(name=vip['id'],
+                                                                     folder=vip['tenant_id'])
                 bigip.pool.set_lb_method(name=pool['id'],
                                          lb_method=pool['lb_method'],
                                          folder=pool['tenant_id'])

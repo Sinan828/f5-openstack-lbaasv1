@@ -54,7 +54,7 @@ class LBaaSBuilderBigipObjects(LBaaSBuilder):
         self._check_monitor_delete(service)
 
         start_time = time()
-        self._assure_pool_create(service['pool'])
+        self._assure_pool_create(service)
         LOG.debug("    _assure_pool_create took %.5f secs" %
                   (time() - start_time))
 
@@ -80,11 +80,11 @@ class LBaaSBuilderBigipObjects(LBaaSBuilder):
 
         return all_subnet_hints
 
-    def _assure_pool_create(self, pool):
+    def _assure_pool_create(self, service):
         """ Provision Pool - Create/Update """
         # Service Layer (Shared Config)
         for bigip in self.driver.get_config_bigips():
-            self.bigip_pool_manager.assure_bigip_pool_create(bigip, pool)
+            self.bigip_pool_manager.assure_bigip_pool_create(bigip, service)
 
     def _assure_pool_monitors(self, service):
         """
