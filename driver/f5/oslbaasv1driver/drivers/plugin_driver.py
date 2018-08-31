@@ -371,7 +371,7 @@ class LoadBalancerCallbacks(object):
                         member['network']['provider:segmentation_id'] = member_segment[api.SEGMENTATION_ID]
                         member['network']['provider:physical_network'] = member_segment[api.PHYSICAL_NETWORK]
                         memberss.append(member)
-                        self._core_plugin().delete_port(context, member_fake_port['id'])
+                    self._core_plugin().delete_port(context, member_fake_port['id'])
                         
         LOG.debug("update pool network type if pool with vip or member")
         filters = {"network_id": [pool['network']['id']], 'binding:host_id': [host_id]}
