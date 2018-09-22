@@ -1522,6 +1522,13 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
             vip['port_id'],
             {'port': port_data}
         )
+
+        service = self.callbacks.get_service_by_pool_id(
+            context,
+            pool_id=vip['pool_id'],
+            global_routed_mode=self._is_global_routed(agent),
+            host=agent['host']
+        )
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_vip(context, vip, service, agent['host'])
 
