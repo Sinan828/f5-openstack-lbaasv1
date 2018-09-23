@@ -1497,26 +1497,12 @@ class F5PluginDriver(LoadBalancerAbstractDriver):
         # which agent should handle provisioning
         agent = self.get_pool_agent(context, vip['pool_id'])
         vip['pool'] = self._get_pool(context, vip['pool_id'])
-        # get the complete service definition from the data model
-        service = self.callbacks.get_service_by_pool_id(
-            context,
-            pool_id=vip['pool_id'],
-            global_routed_mode=self._is_global_routed(agent),
-            host=agent['host']
-        )
-
         # Update the port for the VIP to show ownership by this driver
-        port_data = {
-            'admin_state_up': True,
-            'device_id': str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_DNS, str(agent['host'])
-                )
-            ),
-            'device_owner': 'network:f5lbaas',
-            'status': q_const.PORT_STATUS_ACTIVE
-        }
-        port_data[portbindings.HOST_ID] = agent['host']
+        port_data = {'admin_state_up': True,
+                     'device_id': str(uuid.uuid5(uuid.NAMESPACE_DNS, str(agent['host']))),
+                     'device_owner': 'network:f5lbaas',
+                     'status': q_const.PORT_STATUS_ACTIVE,
+                     portbindings.HOST_ID: agent['host']}
         self._core_plugin().update_port(
             context,
             vip['port_id'],
